@@ -1,6 +1,6 @@
 # MSNCVGA: Multi-Scale Network with Cross-View Gated Attention for HAR
 
-This repository contains the official implementation of the paper: **"A Multi-Scale Network with Cross-View Gated Attention Enhancement for Human Activity Recognition"**.
+This repository contains the model of the paper: **"A Multi-Scale Network with Cross-View Gated Attention Enhancement for Human Activity Recognition"**.
 
 ## 📄 Paper Information
 

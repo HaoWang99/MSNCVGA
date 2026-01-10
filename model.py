@@ -20,11 +20,11 @@ class LayerNorm(nn.Module):
         if self.data_format == "channels_last":
             return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         elif self.data_format == "channels_first":
-            # Compute mean and variance for channels_first format
-            u = x.mean(1, keepdim=True) # Mean across the normalized shape
-            s = (x - u).pow(2).mean(1, keepdim=True) # Variance
-            x = (x - u) / torch.sqrt(s + self.eps) # Normalize
-            x = self.weight[:, None] * x + self.bias[:, None] # Scale and shift
+            
+            u = x.mean(1, keepdim=True) 
+            s = (x - u).pow(2).mean(1, keepdim=True) 
+            x = (x - u) / torch.sqrt(s + self.eps) 
+            x = self.weight[:, None] * x + self.bias[:, None] 
             return x
 
 
@@ -64,7 +64,7 @@ class AU(nn.Module):
 
     def forward(self, x):
         batch_size, _, length = x.size()
-        feat = x.permute(0, 2, 1).contiguous().view(batch_size * length, -1, 1)  # (B,C,L) → (B,L,C) → (B×L,C,1)
+        feat = x.permute(0, 2, 1).contiguous().view(batch_size * length, -1, 1)  
         encode = self.conv(F.avg_pool1d(x, length).view(batch_size, -1).unsqueeze(1))
         energy = torch.matmul(feat, encode.repeat(length, 1, 1)) 
         full_relation = self.softmax(energy) 
@@ -103,20 +103,19 @@ class MVAU(nn.Module):
         x = self.proj_first(x)
         a, x = torch.chunk(x, 2, dim=1)
 
-        # a, x = (B, C, L)
+        
         a1 = a
         att1 = self.sub_att1(a1)
-        # a, x = (B, C, L)
+       
         a2 = a
-        a2 = a2.permute(0, 2, 1).contiguous() # (B, L, C)
+        a2 = a2.permute(0, 2, 1).contiguous() 
         att2 = self.sub_att2(a2)
-        att2 = att2.permute(0, 2, 1).contiguous() # (B, C, L)
-        # a, x = (B, C, L)
+        att2 = att2.permute(0, 2, 1).contiguous() 
+       
         a3 = a
-        a3 = a3.permute(1, 0, 2).contiguous() # (C, B, L)
+        a3 = a3.permute(1, 0, 2).contiguous() 
         att3 = self.sub_att3(a3)
-        att3 = att3.permute(1, 0, 2).contiguous() # (B, C, L)
-
+        att3 = att3.permute(1, 0, 2).contiguous() 
         att = att1 * self.scale1 + att2 * self.scale2 + att3 * self.scale3
         x = self.proj_last(x * att) * self.scale + shortcut
         return x
@@ -178,7 +177,7 @@ class wConv_with_CVGA(nn.Module):
         super().__init__()
         self.Conv = nn.Sequential(
             wConv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, den_pattern=den_pattern, stride=stride, padding=padding, groups=groups, bias=bias, dilation=dilation),
-            # nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=groups, bias=bias, dilation=dilation),
+            
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=3, stride=1)
         )
@@ -292,4 +291,5 @@ if __name__ == '__main__':
     y_pred = model(sensor_accel, sensor_gyro)
 
     print(y_pred.shape)
+
 

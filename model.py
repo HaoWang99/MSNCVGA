@@ -1,15 +1,9 @@
-# create: Fangyu Liu; Hao Wang
-# date: October 2025
-
 import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributions as td
 from torchvision import transforms
-
-#Multi-scale Attention Network for Single Image Super-Resolution (CVPR 2024)
-#https://arxiv.org/abs/2209.14145
 
 class LayerNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
@@ -64,54 +58,20 @@ class GSAU(nn.Module):
 # Attention Unit
 class AU(nn.Module):
     def __init__(self, plane):
-        # 初始化函数，plane是输入和输出特征图的通道数
         super(AU, self).__init__()
-        # 定义全连接层，conv
         self.conv = nn.Linear(plane, plane)
-        
-        # 定义softmax操作，用于计算关系矩阵
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
-        """
-        前向传播过程
-        Args:
-            x: 输入的特征图，形状为 (batch_size, channels, length)
-        Returns:
-            out: 处理后的特征图，形状为 (batch_size, channels, length)
-        """
         batch_size, _, length = x.size()
-        
-        # 对输入张量进行重塑，获取序列特征
-        # 在1D情况下，我们只需要处理序列维度
         feat = x.permute(0, 2, 1).contiguous().view(batch_size * length, -1, 1)  # (B,C,L) → (B,L,C) → (B×L,C,1)
+        encode = self.conv(F.avg_pool1d(x, length).view(batch_size, -1).unsqueeze(1))
+        energy = torch.matmul(feat, encode.repeat(length, 1, 1)) 
+        full_relation = self.softmax(energy) 
+        full_aug = torch.bmm(full_relation, feat).view(batch_size, length, -1).permute(0, 2, 1)
+        out = full_au
+        return out
         
-        # 对输入张量进行全局平均池化，并通过全连接层进行编码
-        encode = self.conv(F.avg_pool1d(x, length).view(batch_size, -1).unsqueeze(1))  # 全局编码
-        # 过程: 
-        # 1. 平均池化: F.avg_pool1d(x, length) → (B,C,1) 在整个序列维度池化
-        # 2. 重塑: .view(batch_size, -1) → (B,C)
-        # 3. 增加维度: .unsqueeze(1) → (B,1,C)
-        # 4. 全连接: self.conv1 → (B,1,C)
-        
-        # 计算序列关系矩阵
-        energy = torch.matmul(feat, encode.repeat(length, 1, 1))  # 计算序列关系
-        # feat: (B×L,C,1), encode.repeat: (B×L,1,C) → 矩阵乘法后: (B×L,C,C)
-        
-        # 计算经过softmax后的关系矩阵
-        full_relation = self.softmax(energy)  # 序列关系, (B×L,C,C)
-        
-        # 通过矩阵乘法和关系矩阵，对特征进行加权和增强
-        full_aug = torch.bmm(full_relation, feat).view(batch_size, length, -1).permute(0, 2, 1)  # 序列增强
-        # 过程:
-        # 1. 矩阵乘法: torch.bmm(full_relation, feat) → (B×L,C,1)
-        # 2. 重塑: .view(batch_size, length, -1) → (B,L,C)  
-        # 3. 转置: .permute(0, 2, 1) → (B,C,L)
-
-        out = full_aug
-        
-        return out  # 返回处理后的特征图
-
 # Multi-View Attention Unit (MVAU)
 class MVAU(nn.Module):
     def __init__(self, B, C, L, k=3):
@@ -134,7 +94,7 @@ class MVAU(nn.Module):
 
         self.proj_last = nn.Sequential(
             nn.Conv1d(n_feats, n_feats, k, 1, k // 2, bias=False),
-            nn.ReLU()  # ReLU激活函数
+            nn.ReLU() 
         )
         
     def forward(self, x):
@@ -173,7 +133,6 @@ class CVGA(nn.Module):
         x = self.gsau(x)
         return x
 
-# 方案1：动态生成Phi向量
 class wConv1d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, den_pattern=[0.7, 1.0, 0.7], stride=1, padding=1, groups=1, bias=False, dilation=1):
         super(wConv1d, self).__init__() 
@@ -183,32 +142,28 @@ class wConv1d(nn.Module):
         self.groups = groups 
         self.dilation = dilation
         
-        # 1D卷积权重
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels // groups, kernel_size))
         nn.init.kaiming_normal_(self.weight, mode='fan_out', nonlinearity='relu') 
         self.bias = nn.Parameter(torch.zeros(out_channels)) if bias else None
 
-        # 动态生成Phi向量以匹配卷积核大小
         self.register_buffer('Phi', self._create_phi_vector(kernel_size, den_pattern))
 
     def _create_phi_vector(self, kernel_size, den_pattern):
-        """根据卷积核大小动态生成Phi向量"""
+
         if kernel_size % 2 == 0:
             raise ValueError("Kernel size must be odd for symmetric Phi vector")
         
         center_index = kernel_size // 2
         
         if len(den_pattern) == 3:
-            # 使用三元素模式 [left, center, right]
             left_values = torch.linspace(den_pattern[0], den_pattern[1], center_index + 1)[:-1]
             right_values = torch.linspace(den_pattern[1], den_pattern[2], center_index + 1)[1:]
             phi = torch.cat([left_values, torch.tensor([den_pattern[1]]), right_values])
         else:
-            # 通用模式：从中心向两边衰减
             center_value = 1.0
             half_size = center_index
             indices = torch.arange(kernel_size).float() - center_index
-            phi = torch.exp(-(indices ** 2) / (2 * (half_size / 2) ** 2))  # 高斯衰减
+            phi = torch.exp(-(indices ** 2) / (2 * (half_size / 2) ** 2)) 
         
         return phi
 
@@ -238,16 +193,16 @@ class wConv_with_CVGA(nn.Module):
 class GlobalAvgPool(nn.Module):
     def __init__(self, input_channels=512, output_features=18):
         super().__init__()
-        # 先用1x1卷积将512通道降维到18通道
+
         self.channel_reduction = nn.Conv1d(input_channels, output_features, kernel_size=1)
-        # 然后全局平均池化（将长度维度池化为1）
+
         self.global_avg_pool = nn.AdaptiveAvgPool1d(1)
         
     def forward(self, x):
-        # x形状: [B, 512, L]
-        x = self.channel_reduction(x)  # [B, 18, L]
-        x = self.global_avg_pool(x)    # [B, 18, 1]
-        x = x.squeeze(-1)              # [B, 18]
+
+        x = self.channel_reduction(x) 
+        x = self.global_avg_pool(x)   
+        x = x.squeeze(-1)            
         return x
 
 
@@ -294,7 +249,7 @@ class Our(nn.Module):
         self.pool_layer = GlobalAvgPool(input_channels=256, output_features=18)
 
     def forward(self, sensor_accel, sensor_gyro):
-        # (B, 8, 500)
+
         x = torch.cat((sensor_accel, sensor_gyro), dim=1)
         x = self.proj_first(x)
         a_1, a_2, a_3 = torch.chunk(x, 3, dim=1)
@@ -338,66 +293,3 @@ if __name__ == '__main__':
 
     print(y_pred.shape)
 
-    # import time
-
-    # # 暖身运行（减少首次运行的 overhead）
-    # with torch.no_grad():
-    #     for _ in range(100):
-    #         model(sensor_accel, sensor_gyro)
-
-    # # 测量推理时间
-    # num_runs = 1000
-    # total_time = 0.0
-
-    # start_time = time.time()
-    # # 测量推理时间，100轮
-    # with torch.no_grad():
-    #     for _ in range(num_runs):
-    #         output = model(sensor_accel, sensor_gyro)
-    #         end_time = time.time()
-    # total_time += (end_time - start_time)
-
-    # inference_time = total_time  / num_runs
-
-    # print(f"多轮平均推理时间: {inference_time} 秒")
-
-    # inference_time_seconds = total_time  / num_runs
-    # inference_time_ms = inference_time_seconds * 1000  # 转换为毫秒
-
-    # print(f"多轮平均推理时间: {inference_time_ms} 毫秒")
-
-    # output = model(sensor_accel, sensor_gyro)
-    # print(output.shape)
-
-    # print('--------------------------------------------------------------------------------')
-    # from thop import profile
-    # total = sum([param.nelement() for param in model.parameters()])
-    # #1048576 == 1024 * 1024
-    # #1073741824 == 1024 * 1024 * 1024
-    # #%.2f，保留2位小数点
-    # print("Number of parameter: %.2fM" % (total / 1048576))
-    # flops, params = profile(model, inputs=(sensor_accel, sensor_gyro,))
-    # print("Number of flops: %.2fG" % (flops / 1073741824))
-    # print("Number of parameters: %.2fM" % (params / 1048576))
-    # print("Number of flops: %.2f" % (flops / 1))
-    # print("Number of parameters: %.2f" % (params / 1))
-
-
-# torch.Size([1, 18])
-# 多轮平均推理时间: 0.026763784646987913 秒
-# 多轮平均推理时间: 26.763784646987915 毫秒
-# torch.Size([1, 18])
-# --------------------------------------------------------------------------------
-# Number of parameter: 0.54M
-# [INFO] Register zero_ops() for <class 'torch.nn.modules.activation.ReLU'>.
-# [INFO] Register zero_ops() for <class 'torch.nn.modules.pooling.MaxPool1d'>.
-# [INFO] Register zero_ops() for <class 'torch.nn.modules.container.Sequential'>.
-# [INFO] Register count_linear() for <class 'torch.nn.modules.linear.Linear'>.
-# [INFO] Register count_softmax() for <class 'torch.nn.modules.activation.Softmax'>.
-# [INFO] Register count_convNd() for <class 'torch.nn.modules.conv.Conv1d'>.
-# [INFO] Register count_gru() for <class 'torch.nn.modules.rnn.GRU'>.
-# [INFO] Register count_adap_avgpool() for <class 'torch.nn.modules.pooling.AdaptiveAvgPool1d'>.
-# Number of flops: 0.04G
-# Number of parameters: 0.52M
-# Number of flops: 44492050.00
-# Number of parameters: 540958.00

@@ -205,7 +205,7 @@ class GlobalAvgPool(nn.Module):
         return x
 
 
-class Our(nn.Module):
+class MSNCVGA(nn.Module):
     def __init__(self, batch, channels):
         super().__init__()
 
@@ -285,11 +285,12 @@ class Our(nn.Module):
 if __name__ == '__main__':
     sensor_accel = torch.randn(4, 4, 500)
     sensor_gyro = torch.randn(4, 4, 500)
-    model = Our(4, 8)
+    model = MSNCVGA(4, 8)
     model.eval()
 
     y_pred = model(sensor_accel, sensor_gyro)
 
     print(y_pred.shape)
+
 
 
